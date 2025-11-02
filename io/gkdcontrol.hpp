@@ -15,6 +15,8 @@
 #include "tools/logger.hpp"
 #include "tools/thread_safe_queue.hpp"
 #include "io/gkdcontrol/send_control.hpp"
+#include "tasks/auto_aim/armor.hpp"
+
 
 namespace io
 {
@@ -39,6 +41,7 @@ enum class GKDShootMode
 inline constexpr std::array<std::string_view, 3> GKD_SHOOT_MODE_NAMES = {
   "left_shoot", "right_shoot", "both_shoot"};
 
+
 class GKDControl
 {
 public:
@@ -50,6 +53,7 @@ public:
   GKDControl(const std::string & config_path);
 
   Eigen::Quaterniond imu_at(std::chrono::steady_clock::time_point timestamp);
+  auto_aim::Color color_at(std::chrono::steady_clock::time_point timestamp);
 
   void send(Command command) const;
 
@@ -60,9 +64,20 @@ private:
     std::chrono::steady_clock::time_point timestamp;
   };
 
+  struct Colors 
+  {
+    auto_aim::Color enemy_colors;
+    std::chrono::steady_clock::time_point timestamp;
+  };
+
   tools::ThreadSafeQueue<IMUData> queue_;  // 必须在socket_之前初始化
+  tools::ThreadSafeQueue<Colors> color_queue;
+
   IMUData data_ahead_;
   IMUData data_behind_;
+
+  Colors enemy_color_ahead_;
+  Colors enemy_color_behind_;
 
   IO::Server_socket_interface socket_interface_;
 
