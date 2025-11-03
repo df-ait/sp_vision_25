@@ -38,7 +38,8 @@ int main(int argc, char * argv[])
   io::GKDControl gkdcontrol(config_path);
   io::Camera camera(config_path);
 
-  auto_aim::Color enemy_color;
+  auto t = std::chrono::steady_clock::now();
+  auto enemy_color = gkdcontrol.color_at(t - 1ms);
 
   auto_aim::YOLO detector(config_path, false);
   auto_aim::Solver solver(config_path);
@@ -47,7 +48,6 @@ int main(int argc, char * argv[])
 
   cv::Mat img;
   Eigen::Quaterniond q;
-  std::chrono::steady_clock::time_point t;
 
   while (!exiter.exit()) {
     camera.read(img, t);

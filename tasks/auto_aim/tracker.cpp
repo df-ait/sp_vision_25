@@ -11,6 +11,7 @@ namespace auto_aim
 {
 Tracker::Tracker(const std::string & config_path, Solver & solver, Color& enemy_color)
 : solver_{solver},
+  enemy_color_{enemy_color},
   detect_count_(0),
   temp_lost_count_(0),
   state_{"lost"},
@@ -19,7 +20,6 @@ Tracker::Tracker(const std::string & config_path, Solver & solver, Color& enemy_
   omni_target_priority_{ArmorPriority::fifth}
 {
   auto yaml = YAML::LoadFile(config_path);
-  enemy_color_ = enemy_color;
   min_detect_count_ = yaml["min_detect_count"].as<int>();
   max_temp_lost_count_ = yaml["max_temp_lost_count"].as<int>();
   outpost_max_temp_lost_count_ = yaml["outpost_max_temp_lost_count"].as<int>();
@@ -39,8 +39,9 @@ std::list<Target> Tracker::track(
     tools::logger()->warn("[Tracker] Large dt: {:.3f}s", dt);
     state_ = "lost";
   }
-  // 过滤掉非我方装甲板
-  armors.remove_if([&](const auto_aim::Armor & a) { return a.color != enemy_color_; });
+  if (use_enemy_color) {
+    armors.remove_if([&](const auto_aim::Armor & a) { return a.color != enemy_color_; });
+  }
 
   // 过滤前哨站顶部装甲板
   // armors.remove_if([this](const auto_aim::Armor & a) {
