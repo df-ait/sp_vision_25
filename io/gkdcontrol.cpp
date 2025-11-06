@@ -70,6 +70,9 @@ void GKDControl::initialize_udp_reception()
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
       }
+      // 无奈之举
+      current.yaw = -current.yaw;
+      current.pitch = -current.pitch;
 
       Eigen::Vector3d euler(current.yaw, current.pitch, 0.0);
       Eigen::Quaterniond q(tools::rotation_matrix(euler));

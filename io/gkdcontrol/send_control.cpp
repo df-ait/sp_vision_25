@@ -66,8 +66,8 @@ void send_control(double yaw_set, double pitch_set, bool fire)
     Vison_control pkg{};
 
     pkg.header = 0x6A;
-    pkg.yaw_set = yaw_set;
-    pkg.pitch_set = pitch_set;
+    pkg.yaw_set = -yaw_set;
+    pkg.pitch_set = -pitch_set;
     pkg.fire = fire;
     pkg.mode = ROBOT_FOLLOW_GIMBAL;
 
