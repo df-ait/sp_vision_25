@@ -39,7 +39,7 @@ int main(int argc, char * argv[])
   io::GKDControl gkdcontrol(config_path);
   io::Camera camera(config_path);
 
-  auto_aim::YOLO detector(config_path, false);
+  auto_aim::YOLO detector(config_path, true);
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
   auto_aim::Aimer aimer(config_path);
@@ -53,7 +53,6 @@ int main(int argc, char * argv[])
   while (!exiter.exit()) {
     camera.read(img, t);
     if (img.empty()) continue;
-
     q = gkdcontrol.imu_at(t - 1ms);
 
     // recorder.record(img, q, t);
@@ -68,10 +67,17 @@ int main(int argc, char * argv[])
 
     auto aimer_start = std::chrono::steady_clock::now();
     auto command = aimer.aim(targets, t, gkdcontrol.bullet_speed);
-    auto finish = std::chrono::steady_clock::now();
 
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
     command.shoot = shooter.shoot(command, aimer, targets, ypr);
+
+    auto finish = std::chrono::steady_clock::now();
+
+    tools::logger()->info(
+      "[{}] yolo: {:.1f}ms, tracker: {:.1f}ms, aimer: {:.1f}ms", frame_count,
+      tools::delta_time(tracker_start, yolo_start) * 1e3,
+      tools::delta_time(aimer_start, tracker_start) * 1e3,
+      tools::delta_time(finish, aimer_start) * 1e3);
 
     tools::draw_text(
       img,
