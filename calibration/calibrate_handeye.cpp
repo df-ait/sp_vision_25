@@ -3,8 +3,12 @@
 
 #include <Eigen/Dense>  // 必须在opencv2/core/eigen.hpp上面
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <fstream>
+#include <filesystem>
 #include <string>
+#include <thread>
 #include <vector>
 #include <opencv2/core/eigen.hpp>
 #include <opencv2/opencv.hpp>
@@ -12,13 +16,15 @@
 #include "io/camera.hpp"
 #include "io/gkdcontrol.hpp"
 #include "tools/math_tools.hpp"
+#include "tools/thread_safe_queue.hpp"
 
 const std::string keys =
   "{help h usage ? |                          | 输出命令行参数说明}"
   "{config-path c  | configs/calibration.yaml | yaml配置文件路径 }"
-  "{samples s      | 60                       | 采集多少组有效数据 }"
+  "{samples s      | 40                       | 采集多少组有效数据 }"
   "{interval i     | 20                       | 每隔多少帧处理一次 }"
-  "{auto-capture a | 1                        | 识别成功时自动记录 }";
+  "{auto-capture a | 1                        | 识别成功时自动记录 }"
+  "{output o       |                          | 结果保存路径        }";
 
 std::vector<cv::Point3f> centers_3d(const cv::Size & pattern_size, const float center_distance)
 {
@@ -31,7 +37,7 @@ std::vector<cv::Point3f> centers_3d(const cv::Size & pattern_size, const float c
   return centers_3d;
 }
 
-void print_yaml(
+std::string build_yaml(
   const std::vector<double> & R_gimbal2imubody_data, const cv::Mat & R_camera2gimbal,
   const cv::Mat & t_camera2gimbal, const Eigen::Vector3d & ypr)
 {
@@ -55,7 +61,7 @@ void print_yaml(
   result << YAML::Newline;
   result << YAML::EndMap;
 
-  fmt::print("\n{}\n", result.c_str());
+  return result.c_str();
 }
 
 bool detect_chessboard(
@@ -83,6 +89,7 @@ int main(int argc, char * argv[])
   auto target_samples = cli.get<int>("samples");
   auto frame_interval = std::max(1, cli.get<int>("interval"));
   bool auto_capture_enabled = cli.get<int>("auto-capture") != 0;
+  auto output_path = cli.get<std::string>("output");
   fmt::print(
     "目标采集 {} 组数据。每隔 {} 帧处理一次，{}。\n",
     target_samples, frame_interval, auto_capture_enabled ? "检测到棋盘自动记录" : "按空格手动记录");
@@ -109,30 +116,47 @@ int main(int argc, char * argv[])
   std::vector<cv::Mat> R_gimbal2world_list, t_gimbal2world_list;
   std::vector<cv::Mat> rvecs, tvecs;
 
+  struct FramePacket
+  {
+    cv::Mat frame;
+    std::chrono::steady_clock::time_point timestamp;
+  };
+
+  tools::ThreadSafeQueue<FramePacket, true> frame_queue(5);
+  std::atomic<bool> capture_running = true;
+  std::thread capture_thread([&]() {
+    while (capture_running) {
+      FramePacket packet;
+      camera.read(packet.frame, packet.timestamp);
+      if (packet.frame.empty()) continue;
+      frame_queue.push(packet);
+    }
+  });
+
   cv::namedWindow("HandEye Calibration", cv::WINDOW_NORMAL);
   int collected = 0;
   int frame_counter = 0;
 
   while (target_samples <= 0 || collected < target_samples) {
-    cv::Mat frame;
-    std::chrono::steady_clock::time_point timestamp;
-    camera.read(frame, timestamp);
-    if (frame.empty()) continue;
+    FramePacket packet;
+    frame_queue.pop(packet);
+
+    if (packet.frame.empty()) continue;
     frame_counter++;
     if (frame_counter % frame_interval != 0) continue;
 
     cv::Mat gray;
-    cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+    cv::cvtColor(packet.frame, gray, cv::COLOR_BGR2GRAY);
 
     std::vector<cv::Point2f> centers_2d;
     bool found = detect_chessboard(gray, pattern_size, centers_2d);
 
-    cv::Mat drawing = frame.clone();
+    cv::Mat drawing = packet.frame.clone();
     if (found) {
       cv::drawChessboardCorners(drawing, pattern_size, centers_2d, found);
     }
 
-    Eigen::Quaterniond q = gkdcontrol.imu_at(timestamp);
+    Eigen::Quaterniond q = gkdcontrol.imu_at(packet.timestamp);
     Eigen::Matrix3d R_imubody2imuabs = q.toRotationMatrix();
     Eigen::Matrix3d R_gimbal2world =
       R_gimbal2imubody.transpose() * R_imubody2imuabs * R_gimbal2imubody;
@@ -186,6 +210,9 @@ int main(int argc, char * argv[])
     }
   }
 
+  capture_running = false;
+  if (capture_thread.joinable()) capture_thread.join();
+
   cv::destroyWindow("HandEye Calibration");
 
   if (R_gimbal2world_list.size() < 3) {
@@ -207,5 +234,20 @@ int main(int argc, char * argv[])
   Eigen::Vector3d ypr = tools::eulers(R_camera2ideal, 1, 0, 2) * 57.3;  // degree
 
   // 输出yaml
-  print_yaml(R_gimbal2imubody_data, R_camera2gimbal, t_camera2gimbal, ypr);
+  auto yaml_result = build_yaml(R_gimbal2imubody_data, R_camera2gimbal, t_camera2gimbal, ypr);
+  fmt::print("\n{}\n", yaml_result);
+
+  std::filesystem::path output_path_fs(output_path);
+  if (output_path_fs.empty()) {
+    auto config_parent = std::filesystem::path(config_path).parent_path();
+    output_path_fs = config_parent / "handeye_result.yaml";
+  }
+
+  std::ofstream ofs(output_path_fs);
+  if (!ofs) {
+    fmt::print("保存结果到 {} 失败，请检查路径。\n", output_path_fs.string());
+  } else {
+    ofs << yaml_result << std::endl;
+    fmt::print("标定结果已保存到 {}\n", output_path_fs.string());
+  }
 }
