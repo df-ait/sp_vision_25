@@ -2,6 +2,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <Eigen/Dense>  // 必须在opencv2/core/eigen.hpp上面
+#include <algorithm>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -15,7 +16,9 @@
 const std::string keys =
   "{help h usage ? |                          | 输出命令行参数说明}"
   "{config-path c  | configs/calibration.yaml | yaml配置文件路径 }"
-  "{samples s      | 40                       | 采集多少组有效数据 }";
+  "{samples s      | 60                       | 采集多少组有效数据 }"
+  "{interval i     | 20                       | 每隔多少帧处理一次 }"
+  "{auto-capture a | 1                        | 识别成功时自动记录 }";
 
 std::vector<cv::Point3f> centers_3d(const cv::Size & pattern_size, const float center_distance)
 {
@@ -78,7 +81,11 @@ int main(int argc, char * argv[])
   }
   auto config_path = cli.get<std::string>("config-path");
   auto target_samples = cli.get<int>("samples");
-  fmt::print("按空格保存棋盘格，按q退出。目标采集 {} 组数据。\n", target_samples);
+  auto frame_interval = std::max(1, cli.get<int>("interval"));
+  bool auto_capture_enabled = cli.get<int>("auto-capture") != 0;
+  fmt::print(
+    "目标采集 {} 组数据。每隔 {} 帧处理一次，{}。\n",
+    target_samples, frame_interval, auto_capture_enabled ? "检测到棋盘自动记录" : "按空格手动记录");
 
   // 读取标定配置
   auto yaml = YAML::LoadFile(config_path);
@@ -104,12 +111,15 @@ int main(int argc, char * argv[])
 
   cv::namedWindow("HandEye Calibration", cv::WINDOW_NORMAL);
   int collected = 0;
+  int frame_counter = 0;
 
   while (target_samples <= 0 || collected < target_samples) {
     cv::Mat frame;
     std::chrono::steady_clock::time_point timestamp;
     camera.read(frame, timestamp);
     if (frame.empty()) continue;
+    frame_counter++;
+    if (frame_counter % frame_interval != 0) continue;
 
     cv::Mat gray;
     cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
@@ -144,18 +154,20 @@ int main(int argc, char * argv[])
     cv::putText(
       drawing, "SPACE: Capture   Q: Quit", {30, drawing.rows - 30}, cv::FONT_HERSHEY_SIMPLEX, 0.8,
       cv::Scalar(255, 255, 255), 2);
+    if (auto_capture_enabled) {
+      cv::putText(
+        drawing, "AUTO CAPTURE", {30, drawing.rows - 70}, cv::FONT_HERSHEY_SIMPLEX, 0.8,
+        cv::Scalar(0, 200, 255), 2);
+    }
     cv::imshow("HandEye Calibration", drawing);
 
-    int key = cv::waitKey(1);
-    if (key == 'q' || key == 'Q') break;
-
-    if ((key == ' ' || key == 's' || key == 'S') && found) {
+    auto record_sample = [&](const std::vector<cv::Point2f> & centers) {
       cv::Mat R_gimbal2world_cv;
       cv::eigen2cv(R_gimbal2world, R_gimbal2world_cv);
       cv::Mat t_gimbal2world = (cv::Mat_<double>(3, 1) << 0, 0, 0);
       cv::Mat rvec, tvec;
       cv::solvePnP(
-        object_points, centers_2d, camera_matrix, distort_coeffs, rvec, tvec, false,
+        object_points, centers, camera_matrix, distort_coeffs, rvec, tvec, false,
         cv::SOLVEPNP_IPPE);
 
       R_gimbal2world_list.emplace_back(R_gimbal2world_cv.clone());
@@ -164,6 +176,13 @@ int main(int argc, char * argv[])
       tvecs.emplace_back(tvec.clone());
       collected++;
       fmt::print("记录第 {} 组数据。\n", collected);
+    };
+
+    int key = cv::waitKey(1);
+    if (key == 'q' || key == 'Q') break;
+
+    if (found && ((key == ' ' || key == 's' || key == 'S') || auto_capture_enabled)) {
+      record_sample(centers_2d);
     }
   }
 
