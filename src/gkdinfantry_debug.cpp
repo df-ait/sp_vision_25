@@ -69,7 +69,7 @@ int main(int argc, char * argv[])
     auto command = aimer.aim(targets, t, gkdcontrol.bullet_speed);
 
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
-    command.shoot = shooter.shoot(command, aimer, targets, ypr);
+    command.shoot = true;
 
     auto finish = std::chrono::steady_clock::now();
 
@@ -87,7 +87,7 @@ int main(int argc, char * argv[])
       {10, 40}, {154, 50, 205});
 
     tools::draw_text(
-      img, fmt::format("gimbal yaw {:.2f}", ypr[0] * 57.3), {10, 70}, {255, 255, 255});
+      img, fmt::format("gimbal yaw {:.2f} gimbal pitchs {:.2f}", ypr[0] * 57.3, ypr[1] * 57.3), {10, 70}, {255, 255, 255});
 
     if (!targets.empty()) {
       const auto & target = targets.front();

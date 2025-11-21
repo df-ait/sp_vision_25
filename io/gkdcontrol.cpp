@@ -72,18 +72,18 @@ void GKDControl::initialize_udp_reception()
       }
       // 无奈之举
       current.yaw = -current.yaw;
-      current.pitch = -current.pitch;
+      current.pitch = current.pitch;
 
       Eigen::Vector3d euler(current.yaw, current.pitch, 0.0);
       Eigen::Quaterniond q(tools::rotation_matrix(euler));
       queue_.push({q.normalized(), std::chrono::steady_clock::now()});
 
-      const double yaw = current.yaw;
-      const double pitch = current.pitch;
-      const bool red = current.red;
-      tools::logger()->info(
-        "[GKDControl] Recv yaw {:.4f} rad ({:.2f} deg), pitch {:.4f} rad ({:.2f} deg), red: {}",
-        yaw, yaw * RAD2DEG, pitch, pitch * RAD2DEG, red ? "true" : "false");
+      // const double yaw = current.yaw;
+      // const double pitch = current.pitch;
+      // const bool red = current.red;
+      // tools::logger()->info(
+      //   "[GKDControl] Recv yaw {:.4f} rad ({:.2f} deg), pitch {:.4f} rad ({:.2f} deg), red: {}",
+      //   yaw, yaw * RAD2DEG, pitch, pitch * RAD2DEG, red ? "true" : "false");
 
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
