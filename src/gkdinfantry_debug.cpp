@@ -51,6 +51,7 @@ int main(int argc, char * argv[])
   int frame_count = 0;
 
   while (!exiter.exit()) {
+    auto loop_start = std::chrono::steady_clock::now();
     camera.read(img, t);
     if (img.empty()) continue;
     q = gkdcontrol.imu_at(t - 1ms);
@@ -69,13 +70,15 @@ int main(int argc, char * argv[])
     auto command = aimer.aim(targets, t, gkdcontrol.bullet_speed);
 
     Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
-    command.shoot = true;
+    command.shoot = shooter.shoot(command, aimer, targets, ypr);
 
     auto finish = std::chrono::steady_clock::now();
+    auto total_ms = tools::delta_time(finish, loop_start) * 1e3;
+    auto fps = total_ms > 0.0 ? 1000.0 / total_ms : 0.0;
 
     tools::logger()->info(
-      "[{}] yolo: {:.1f}ms, tracker: {:.1f}ms, aimer: {:.1f}ms", frame_count,
-      tools::delta_time(tracker_start, yolo_start) * 1e3,
+      "[{}] total: {:.1f}ms ({:.1f} FPS), yolo: {:.1f}ms, tracker: {:.1f}ms, aimer: {:.1f}ms",
+      frame_count, total_ms, fps, tools::delta_time(tracker_start, yolo_start) * 1e3,
       tools::delta_time(aimer_start, tracker_start) * 1e3,
       tools::delta_time(finish, aimer_start) * 1e3);
 
@@ -87,7 +90,7 @@ int main(int argc, char * argv[])
       {10, 40}, {154, 50, 205});
 
     tools::draw_text(
-      img, fmt::format("gimbal yaw {:.2f} gimbal pitchs {:.2f}", ypr[0] * 57.3, ypr[1] * 57.3), {10, 70}, {255, 255, 255});
+      img, fmt::format("gimbal yaw {:.2f}", ypr[0] * 57.3), {10, 70}, {255, 255, 255});
 
     if (!targets.empty()) {
       const auto & target = targets.front();

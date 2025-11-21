@@ -54,6 +54,10 @@ Eigen::Quaterniond GKDControl::imu_at(std::chrono::steady_clock::time_point time
 
 void GKDControl::send(Command command) const
 {
+  if(command.control == false) {
+    return;
+  }
+  
   send_control(command.yaw, command.pitch, command.shoot);
 }
 
