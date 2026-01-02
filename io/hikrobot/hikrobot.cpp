@@ -2,6 +2,9 @@
 
 #include <libusb-1.0/libusb.h>
 
+#include <string_view>
+#include <unordered_map>
+
 #include "tools/logger.hpp"
 
 using namespace std::chrono_literals;
@@ -70,6 +73,28 @@ void HikRobot::capture_start()
     return;
   }
 
+  // Log enumerated devices to help distinguish multiple cameras/configs.
+  for (unsigned int i = 0; i < device_list.nDeviceNum; ++i) {
+    auto * dev = device_list.pDeviceInfo[i];
+    if (!dev) continue;
+    if (dev->nTLayerType == MV_USB_DEVICE) {
+      const auto & usb = dev->SpecialInfo.stUsb3VInfo;
+      auto view = [](const unsigned char * buf, size_t n) -> std::string_view {
+        size_t len = 0;
+        while (len < n && buf[len] != 0) ++len;
+        return std::string_view{reinterpret_cast<const char *>(buf), len};
+      };
+      tools::logger()->info(
+        "HikRobot device[{}]: vendor=\"{}\" model=\"{}\" serial=\"{}\" user=\"{}\" vid={:#x} pid={:#x}",
+        i, view(usb.chVendorName, sizeof(usb.chVendorName)),
+        view(usb.chModelName, sizeof(usb.chModelName)),
+        view(usb.chSerialNumber, sizeof(usb.chSerialNumber)),
+        view(usb.chUserDefinedName, sizeof(usb.chUserDefinedName)), usb.idVendor, usb.idProduct);
+    } else {
+      tools::logger()->info("HikRobot device[{}]: tlayer={:#x}", i, dev->nTLayerType);
+    }
+  }
+
   ret = MV_CC_CreateHandle(&handle_, device_list.pDeviceInfo[0]);
   if (ret != MV_OK) {
     tools::logger()->warn("MV_CC_CreateHandle failed: {:#x}", ret);
@@ -101,7 +126,7 @@ void HikRobot::capture_start()
     capturing_ = true;
 
     MV_FRAME_OUT raw;
-    MV_CC_PIXEL_CONVERT_PARAM cvt_param;
+    bool logged_frame_info = false;
 
     while (!capture_quit_) {
       std::this_thread::sleep_for(1ms);
@@ -116,32 +141,74 @@ void HikRobot::capture_start()
       }
 
       auto timestamp = std::chrono::steady_clock::now();
-      cv::Mat img(cv::Size(raw.stFrameInfo.nWidth, raw.stFrameInfo.nHeight), CV_8U, raw.pBufAddr);
+      const auto & frame_info = raw.stFrameInfo;
+      const auto width = static_cast<int>(frame_info.nWidth);
+      const auto height = static_cast<int>(frame_info.nHeight);
+      const auto pixel_type = frame_info.enPixelType;
 
-      cvt_param.nWidth = raw.stFrameInfo.nWidth;
-      cvt_param.nHeight = raw.stFrameInfo.nHeight;
+      if (!logged_frame_info) {
+        tools::logger()->info(
+          "HikRobot stream: {}x{}, src_pixel_type={:#x}", width, height,
+          static_cast<unsigned int>(pixel_type));
+        logged_frame_info = true;
+      }
 
+      cv::Mat bgr_image(height, width, CV_8UC3);
+
+      MV_CC_PIXEL_CONVERT_PARAM cvt_param{};
+      cvt_param.nWidth = frame_info.nWidth;
+      cvt_param.nHeight = frame_info.nHeight;
       cvt_param.pSrcData = raw.pBufAddr;
-      cvt_param.nSrcDataLen = raw.stFrameInfo.nFrameLen;
-      cvt_param.enSrcPixelType = raw.stFrameInfo.enPixelType;
-
-      cvt_param.pDstBuffer = img.data;
-      cvt_param.nDstBufferSize = img.total() * img.elemSize();
+      cvt_param.nSrcDataLen = frame_info.nFrameLen;
+      cvt_param.enSrcPixelType = pixel_type;
+      cvt_param.pDstBuffer = bgr_image.data;
+      cvt_param.nDstBufferSize =
+        static_cast<unsigned int>(bgr_image.total() * bgr_image.elemSize());
       cvt_param.enDstPixelType = PixelType_Gvsp_BGR8_Packed;
 
-      // ret = MV_CC_ConvertPixelType(handle_, &cvt_param);
-      const auto & frame_info = raw.stFrameInfo;
-      auto pixel_type = frame_info.enPixelType;
-      cv::Mat dst_image;
-      const static std::unordered_map<MvGvspPixelType, cv::ColorConversionCodes> type_map = {
-        {PixelType_Gvsp_BayerGR8, cv::COLOR_BayerGR2RGB},
-        {PixelType_Gvsp_BayerRG8, cv::COLOR_BayerRG2RGB},
-        {PixelType_Gvsp_BayerGB8, cv::COLOR_BayerGB2RGB},
-        {PixelType_Gvsp_BayerBG8, cv::COLOR_BayerBG2RGB}};
-      cv::cvtColor(img, dst_image, type_map.at(pixel_type));
-      img = dst_image;
+      ret = MV_CC_ConvertPixelType(handle_, &cvt_param);
+      if (ret != MV_OK) {
+        // Fallbacks for common pixel formats; avoid throwing on unknown formats.
+        tools::logger()->warn(
+          "MV_CC_ConvertPixelType failed: {:#x} (src_pixel_type={:#x}, {}x{})", ret,
+          static_cast<unsigned int>(pixel_type), width, height);
 
-      queue_.push({img, timestamp});
+        if (pixel_type == PixelType_Gvsp_BGR8_Packed) {
+          cv::Mat bgr_view(height, width, CV_8UC3, raw.pBufAddr);
+          bgr_image = bgr_view.clone();
+        } else if (pixel_type == PixelType_Gvsp_RGB8_Packed) {
+          cv::Mat rgb_view(height, width, CV_8UC3, raw.pBufAddr);
+          cv::cvtColor(rgb_view, bgr_image, cv::COLOR_RGB2BGR);
+        } else if (pixel_type == PixelType_Gvsp_Mono8) {
+          cv::Mat mono_view(height, width, CV_8UC1, raw.pBufAddr);
+          cv::cvtColor(mono_view, bgr_image, cv::COLOR_GRAY2BGR);
+        } else {
+          // Bayer8 patterns (OpenCV expects BGR output for downstream pipeline).
+          const static std::unordered_map<MvGvspPixelType, cv::ColorConversionCodes> bayer8_map =
+            {
+              {PixelType_Gvsp_BayerGR8, cv::COLOR_BayerGR2BGR},
+              {PixelType_Gvsp_BayerRG8, cv::COLOR_BayerRG2BGR},
+              {PixelType_Gvsp_BayerGB8, cv::COLOR_BayerGB2BGR},
+              {PixelType_Gvsp_BayerBG8, cv::COLOR_BayerBG2BGR},
+            };
+          auto it = bayer8_map.find(pixel_type);
+          if (it == bayer8_map.end()) {
+            tools::logger()->warn(
+              "Unsupported HikRobot pixel type: {:#x} ({}x{}), dropping frame",
+              static_cast<unsigned int>(pixel_type), width, height);
+            ret = MV_CC_FreeImageBuffer(handle_, &raw);
+            if (ret != MV_OK) {
+              tools::logger()->warn("MV_CC_FreeImageBuffer failed: {:#x}", ret);
+              break;
+            }
+            continue;
+          }
+          cv::Mat bayer_view(height, width, CV_8UC1, raw.pBufAddr);
+          cv::cvtColor(bayer_view, bgr_image, it->second);
+        }
+      }
+
+      queue_.push({bgr_image, timestamp});
 
       ret = MV_CC_FreeImageBuffer(handle_, &raw);
       if (ret != MV_OK) {
