@@ -49,9 +49,11 @@ int main(int argc, char * argv[])
   io::USBCamera usbcam1("video0", config_path);
   io::USBCamera usbcam2("video2", config_path);
 
+  auto_aim::Color enemy_color;
+
   auto_aim::YOLO yolo(config_path, false);
   auto_aim::Solver solver(config_path);
-  auto_aim::Tracker tracker(config_path, solver);
+  auto_aim::Tracker tracker(config_path, solver, enemy_color);
   auto_aim::Aimer aimer(config_path);
   auto_aim::Shooter shooter(config_path);
 

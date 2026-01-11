@@ -17,7 +17,7 @@ namespace auto_aim
 class Tracker
 {
 public:
-  Tracker(const std::string & config_path, Solver & solver);
+  Tracker(const std::string & config_path, Solver & solver, Color & enemy_color);
 
   std::string state() const;
 
@@ -31,7 +31,7 @@ public:
 
 private:
   Solver & solver_;
-  Color enemy_color_;
+  Color & enemy_color_;
   int min_detect_count_;
   int max_temp_lost_count_;
   int detect_count_;

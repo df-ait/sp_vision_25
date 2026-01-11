@@ -17,7 +17,8 @@ GKDControl::GKDControl(const std::string & config_path)
 : mode(GKDMode::idle),
   shoot_mode(GKDShootMode::left_shoot),
   ft_angle(0.0),
-  queue_(5000)
+  queue_(5000),
+  color_queue(5000)
 {
   (void)config_path;
   tools::logger()->info("[GKDControl] Using fixed target IP {} for local communication.", kLoopbackIp);
@@ -28,6 +29,10 @@ GKDControl::GKDControl(const std::string & config_path)
   tools::logger()->info("[GKDControl] Waiting for IMU samples...");
   queue_.pop(data_ahead_);
   queue_.pop(data_behind_);
+
+  color_queue.pop(enemy_color_ahead_);
+  color_queue.pop(enemy_color_behind_);
+
   tools::logger()->info("[GKDControl] Ready.");
 }
 
@@ -50,6 +55,28 @@ Eigen::Quaterniond GKDControl::imu_at(std::chrono::steady_clock::time_point time
 
   double k = t_ac / t_ab;
   return q_a.slerp(k, q_b).normalized();
+}
+
+auto_aim::Color GKDControl::color_at(std::chrono::steady_clock::time_point timestamp) {
+  if (enemy_color_behind_.timestamp < timestamp) enemy_color_ahead_ = enemy_color_behind_;
+
+  while (true) {
+    color_queue.pop(enemy_color_behind_);
+    if (enemy_color_behind_.timestamp > timestamp) break;
+    enemy_color_ahead_ = enemy_color_behind_;
+  }
+
+  auto t_a = enemy_color_ahead_.timestamp;
+  auto t_b = enemy_color_behind_.timestamp;
+
+  auto_aim::Color enemy_color = enemy_color_behind_.enemy_colors;
+
+  // std::chrono::duration<double> t_ab = t_b - t_a;
+  // std::chrono::duration<double> t_ac = timestamp - t_a;
+
+  // double k = t_ac / t_ab;
+
+  return enemy_color;
 }
 
 void GKDControl::send(Command command) const
@@ -80,7 +107,19 @@ void GKDControl::initialize_udp_reception()
 
       Eigen::Vector3d euler(current.yaw, current.pitch, 0.0);
       Eigen::Quaterniond q(tools::rotation_matrix(euler));
+
+      auto_aim::Color enemy_color;
+
+      if (current.red) {
+        enemy_color = auto_aim::blue;
+      }
+      else {
+        enemy_color = auto_aim::red;
+      }
+
       queue_.push({q.normalized(), std::chrono::steady_clock::now()});
+
+      color_queue.push({enemy_color, std::chrono::steady_clock::now()});
 
       // const double yaw = current.yaw;
       // const double pitch = current.pitch;

@@ -39,9 +39,11 @@ int main(int argc, char * argv[])
   io::GKDControl gkdcontrol(config_path);
   io::Camera camera(config_path);
 
+  auto_aim::Color enemy_color;
+
   auto_aim::YOLO detector(config_path, true);
   auto_aim::Solver solver(config_path);
-  auto_aim::Tracker tracker(config_path, solver);
+  auto_aim::Tracker tracker(config_path, solver,enemy_color);
   auto_aim::Aimer aimer(config_path);
   auto_aim::Shooter shooter(config_path);
 
@@ -56,6 +58,7 @@ int main(int argc, char * argv[])
     if (img.empty()) continue;
     q = gkdcontrol.imu_at(t - 1ms);
 
+    enemy_color = gkdcontrol.color_at(t-1ms);
     // recorder.record(img, q, t);
 
     solver.set_R_gimbal2world(q);
@@ -75,6 +78,9 @@ int main(int argc, char * argv[])
     auto finish = std::chrono::steady_clock::now();
     auto total_ms = tools::delta_time(finish, loop_start) * 1e3;
     auto fps = total_ms > 0.0 ? 1000.0 / total_ms : 0.0;
+
+    std::string color_str = (enemy_color == auto_aim::Color::red) ? "RED" : "BLUE";
+    tools::logger()->info("Current enemy color: {}",color_str);
 
     tools::logger()->info(
       "[{}] total: {:.1f}ms ({:.1f} FPS), yolo: {:.1f}ms, tracker: {:.1f}ms, aimer: {:.1f}ms",

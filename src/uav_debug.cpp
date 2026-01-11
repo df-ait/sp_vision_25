@@ -39,10 +39,12 @@ int main(int argc, char * argv[])
   io::Camera camera(config_path);
   io::CBoard cboard(config_path);
 
+  auto_aim::Color enemy_color;
+
   auto_aim::Detector detector(config_path);
   auto_aim::Solver solver(config_path);
   auto_aim::YOLO yolo(config_path);
-  auto_aim::Tracker tracker(config_path, solver);
+  auto_aim::Tracker tracker(config_path, solver, enemy_color);
   auto_aim::Aimer aimer(config_path);
   auto_aim::Shooter shooter(config_path);
 
